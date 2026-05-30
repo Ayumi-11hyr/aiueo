@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>あいうえバトル（デモ）</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>あいうえバトル（デモ）</h1>
+      <div id="roomInfo" style="display:none; font-size: 14px; margin-top: 8px; color: #666;">
+        ルームID: <strong id="roomNumber"></strong>
+      </div>
+    </header>
+
+    <section id="lobby">
+      <div style="margin-bottom: 20px;">
+        <input id="nameInput" placeholder="表示名を入力" style="width: 200px; padding: 8px; margin-bottom: 12px; display: block;" />
+      </div>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+        <!-- ルーム作成 -->
+        <div style="border: 2px solid #06c; padding: 16px; border-radius: 8px;">
+          <h3 style="margin-top: 0; color: #06c;">新しいルームを作成</h3>
+          <p style="font-size: 14px; color: #666; margin: 8px 0;">友達を招待してバトル開始</p>
+          <button id="createBtn" style="width: 100%; padding: 12px; background: #06c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold;">ルーム作成</button>
+        </div>
+        
+        <!-- ルーム参加 -->
+        <div style="border: 2px solid #26a69a; padding: 16px; border-radius: 8px;">
+          <h3 style="margin-top: 0; color: #26a69a;">既存のルームに参加</h3>
+          <p style="font-size: 14px; color: #666; margin: 8px 0;">招待されたルームIDを入力</p>
+          <input id="joinRoomId" placeholder="ルームID" style="width: 100%; padding: 8px; margin-bottom: 8px; box-sizing: border-box;" />
+          <button id="joinBtn" style="width: 100%; padding: 12px; background: #26a69a; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold;">参加する</button>
+        </div>
+      </div>
+      <div id="roomLink" style="text-align: center; font-size: 14px; color: #666;"></div>
+    </section>
+
+    <section id="game" style="display:none;">
+      <div id="gamePhaseInfo"></div>
+      <div id="players"></div>
+      
+      <!-- 準備フェーズ：単語入力 -->
+      <div id="wordInputPhase" style="display:none;">
+        <h3>自分の単語を決めてください（2～7文字）</h3>
+        <input id="wordInput" placeholder="2〜7文字の単語を入力" />
+        <button id="submitWord">OK</button>
+      </div>
+
+      <!-- ホスト用：開始ボタン -->
+      <div id="startGameBtn" style="display:none;">
+        <button id="startBtn">対戦を開始する</button>
+      </div>
+
+      <!-- ゲーム進行中：ボードと文字指定 -->
+      <div id="controls" style="display:none;">
+        <div id="turnInfo"></div>
+        <div id="charSelector" style="display:none;">
+          <p>指定する文字を選んでください</p>
+          <div id="kanaButtons"></div>
+        </div>
+        <div id="resetArea" style="text-align: center; margin-top: 20px;">
+          <button id="resetGameBtn" style="display:none; padding: 10px 20px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold;">もう一度遊ぶ</button>
+        </div>
+      </div>
+      <div id="boardArea"></div>
+      <div id="log"></div>
+    </section>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

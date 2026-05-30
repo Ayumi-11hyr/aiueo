@@ -1,0 +1,47 @@
+body { font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; padding: 16px; }
+#app { max-width: 800px; margin: 0 auto; }
+header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+header h1 { margin: 0; }
+#gamePhaseInfo { font-weight: bold; margin-bottom: 12px; color: #06c; }
+#players { display:flex; gap:8px; margin-bottom:12px; flex-wrap: wrap; }
+.player { border:1px solid #ccc; padding:8px; width:160px; }
+.board { display:flex; gap:4px; margin-top:8px; }
+.cell { width:32px; height:40px; border:1px solid #999; display:flex; align-items:center; justify-content:center; font-size:20px; background:#fff; font-weight: bold; }
+.cell.revealed { background:#ffd; }
+.cell.cross { background:#eee; color: #999; }
+#boardArea .player.my-board { border: 2px solid #06c; background: #e3f2fd; }
+.cell.my-hidden { background: #bbdefb; color: #0d47a1; } /* 自分の単語で、まだ当てられていない文字 */
+
+#wordInputPhase { margin: 16px 0; padding: 12px; background: #f0f8ff; border-radius: 4px; }
+#wordInputPhase input { padding: 8px; margin-right: 8px; }
+#startGameBtn { margin: 16px 0; }
+#startGameBtn button { padding: 10px 20px; background: #06c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+#startGameBtn button:hover { background: #0088cc; }
+#controls { margin-top: 12px; }
+#charSelector { margin-top: 12px; padding: 12px; background: #fffacd; border-radius: 4px; }
+#charSelector.not-my-turn { background: #f0f0f0; opacity: 0.8; }
+#kanaButtons { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-top: 8px; max-width: 100%; }
+#kanaButtons button { padding: 8px; font-size: 14px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+#kanaButtons button:hover { background: #ffe; }
+#kanaButtons button.used { background: #666 !important; color: #eee !important; text-decoration: line-through; cursor: not-allowed; opacity: 1; }
+#kanaButtons button:disabled:not(.used) { background: #f9f9f9; color: #bbb; cursor: not-allowed; border-color: #eee; }
+#log { margin-top: 12px; white-space:pre-wrap; background:#f7f7f7; padding:8px; border-radius:4px; max-height:200px; overflow:auto; font-size: 12px; }
+
+.winner-msg { color: #e91e63; font-size: 40px; font-weight: bold; animation: pulse 1s infinite; text-align: center; margin: 20px 0; }
+.loser-msg { color: #666; font-size: 40px; font-weight: bold; text-align: center; margin: 20px 0; }
+#resetGameBtn:hover { background: #d32f2f; }
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+/* モバイル対応 */
+@media (max-width: 600px) {
+  #lobby > div:nth-child(2) { grid-template-columns: 1fr !important; }
+  .cell { width: 28px; height: 36px; font-size: 16px; }
+  .player { width: 140px; }
+  #kanaButtons button { padding: 6px 2px; font-size: 12px; }
+  header h1 { font-size: 20px; }
+}
