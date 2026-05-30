@@ -15,6 +15,7 @@
       <h1>あいうえバトル（デモ）</h1>
       <div id="roomInfo" style="display:none; font-size: 14px; margin-top: 8px; color: #666;">
         ルームID: <strong id="roomNumber"></strong>
+        <button id="copyRoomIdBtn" style="margin-left:8px; cursor:pointer; font-size:12px;">コピー</button>
       </div>
     </header>
 
@@ -44,23 +45,16 @@
 
     <section id="game" style="display:none;">
       <div id="gamePhaseInfo"></div>
-      <div id="players"></div>
+      <div id="themeArea" style="display:none; padding: 10px; background: #eee; border-left: 5px solid #06c; margin-bottom: 10px; font-weight: bold;">
+        お題: <span id="themeDisplay"></span>
+      </div>
       
-      <!-- 準備フェーズ：単語入力 -->
-      <div id="wordInputPhase" style="display:none;">
-        <h3>自分の単語を決めてください（2～7文字）</h3>
-        <input id="wordInput" placeholder="2〜7文字の単語を入力" />
-        <button id="submitWord">OK</button>
-      </div>
-
-      <!-- ホスト用：開始ボタン -->
-      <div id="startGameBtn" style="display:none;">
-        <button id="startBtn">対戦を開始する</button>
-      </div>
-
-      <!-- ゲーム進行中：ボードと文字指定 -->
+      <!-- ゲーム進行中：ボードと文字指定（最上部へ移動） -->
       <div id="controls" style="display:none;">
-        <div id="turnInfo"></div>
+        <div id="turnStatusContainer">
+          <div id="turnInfo"></div>
+          <div id="timerDisplay" style="font-size: 18px; font-weight: bold; color: #d32f2f; margin-bottom: 8px;"></div>
+        </div>
         <div id="charSelector" style="display:none;">
           <p>指定する文字を選んでください</p>
           <div id="kanaButtons"></div>
@@ -70,6 +64,24 @@
         </div>
       </div>
       <div id="boardArea"></div>
+
+      <!-- 準備フェーズ：単語入力 -->
+      <div id="wordInputPhase" style="display:none;">
+        <h3>自分の単語を決めてください（2～7文字）</h3>
+        <input id="wordInput" placeholder="2〜7文字の単語を入力" />
+        <button id="submitWord">OK</button>
+      </div>
+
+      <!-- ホスト用：開始ボタン -->
+      <div id="startGameBtn" style="display:none;">
+        <div id="themeInputArea" style="margin-bottom: 10px;">
+          <label style="display:block; font-size:14px; margin-bottom:4px;">今回のお題（30文字以内）:</label>
+          <input id="themeInput" placeholder="例：くだもの、赤いもの" style="width:100%; padding:8px; box-sizing:border-box;" maxlength="30" />
+        </div>
+        <button id="startBtn">対戦を開始する</button>
+      </div>
+
+      <div id="players" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 10px;"></div>
       <div id="log"></div>
     </section>
   </div>
