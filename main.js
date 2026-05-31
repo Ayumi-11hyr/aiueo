@@ -64,6 +64,7 @@ let gameStatus = {};
 let players = {};
 let boards = {};
 let timerInterval = null; // ターンの制限時間用タイマー
+let lastEffectTs = Date.now(); // 起動時以降の演出のみ表示
 const kanaTable = [
   'わ','ら','や','ま','は','な','た','さ','か','あ',
   'を','り','','み','ひ','に','ち','し','き','い',
@@ -108,10 +109,11 @@ const kanaButtons = document.getElementById('kanaButtons');
 function getDisplayName(pid) {
   if (!pid || !players[pid]) return '不明';
   const name = players[pid].displayName || '名無し';
-  let displayName = pid === me.uid ? `★${name}（あなた）` : name;
-  if (gameStatus && pid === gameStatus.hostId) {
-    displayName += ' [ホスト]';
-  }
+  
+  let displayName = name;
+  if (pid === me.uid) displayName += ' ★あなた';
+  if (gameStatus && pid === gameStatus.hostId) displayName += ' [ホスト]';
+  
   return displayName;
 }
 
@@ -304,36 +306,36 @@ function showRoom(roomId){
 // 【ルーム監視】Firebaseのリスナーを設定し、ゲーム状態の変更をリアルタイムで反映
 // 複数のパスを監視し、状態変化に応じてUI更新を実行
 function listenRoom(rRef){
-  // プレイヤー情報の監視：参加/脱落時に画面を更新
-  rRef.child('players').on('value', snap => {
-    players = snap.val() || {};
-    renderPlayers(players);
-    checkGameEnd(); // 脱落者が出た瞬間にゲーム終了判定を実行
-    checkReadyToStart();
-  });
-  
-  // ボード情報の監視：文字公開時に画面を更新
-  rRef.child('boards').on('value', snap => {
-    boards = snap.val() || {};
+  // ルーム全体のデータを一括で監視し、状態の同期とUI更新を行う
+  rRef.on('value', snap => {
+    const data = snap.val() || {};
+    
+    // グローバル状態を同期（各リスナー間のレースコンディションを防止）
+    players = data.players || {};
+    boards = data.boards || {};
+    wordInputState = data.wordInputState || {};
+    gameStatus = data.game || {};
+    
+    // ホスト判定を更新（ルーム直下またはgame直下のhostIdを参照）
+    isHost = (data.hostId === me.uid || (data.game && data.game.hostId === me.uid));
+
+    // 演出の同期チェック
+    const lastHit = gameStatus.lastHit;
+    if (lastHit && lastHit.ts > lastEffectTs) {
+      lastEffectTs = lastHit.ts;
+      const victimList = Array.isArray(lastHit.victimIds) ? lastHit.victimIds : Object.values(lastHit.victimIds || {});
+      const isMeVictim = victimList.includes(me.uid);
+      const isMeAttacker = lastHit.attackerId === me.uid;
+      
+      if (isMeVictim) showHitEffect(lastHit.char, 'damage');
+      else if (victimList.length > 0) showHitEffect(lastHit.char, 'success');
+    }
+
+    // UI描画とゲームロジックの判定を同期して実行
     renderBoards(boards);
-  });
-  
-  // ゲーム状態の監視：ターン交代・状態遷移時に画面を更新
-  // ホスト判定もここで更新（状態変化時のみ）
-  rRef.child('game').on('value', snap => {
-    gameStatus = snap.val() || {};
-    // ホスト判定を更新
-    isHost = gameStatus && gameStatus.hostId === me.uid;
     renderGame(gameStatus);
     checkReadyToStart();
     checkGameEnd();
-  });
-  
-  // 単語入力準備状況の監視：各プレイヤーの準備完了をリアルタイム表示
-  rRef.child('wordInputState').on('value', snap => {
-    wordInputState = snap.val() || {};
-    renderPlayers(players);
-    checkReadyToStart();
   });
 
   // 切断時の自動削除を設定
@@ -344,53 +346,59 @@ function listenRoom(rRef){
 // 【準備状況判定】現在のゲーム段階に応じて、開始ボタン表示と情報メッセージを制御
 // 各フェーズで必要な条件をチェックし、UIを更新
 function checkReadyToStart(){
+  if (!gameStatus || !gameStatus.state) return;
+
   const playerIds = Object.keys(players);
   const isAPlayer = !!players[me.uid]; // 自分がプレイヤーリストに含まれているか
   
   // フェーズ1: 待機中（ホスト：お題入力待ち、プレイヤー：ホスト待ち）
   if (gameStatus.state === 'waiting') {
+    wordInputPhase.style.display = 'none';
     if (isHost) {
       const hasEnoughPlayers = playerIds.length >= GAME_CONFIG.MIN_PLAYERS;
       if (hasEnoughPlayers) {
         gamePhaseInfo.textContent = '人数がそろいました。お題を入力して開始してください。';
       } else {
-        gamePhaseInfo.textContent = `参加待ち (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)...`;
+        gamePhaseInfo.textContent = `参加待ち (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)... 揃わなくても開始できます。`;
       }
       startGameBtn.style.display = 'block';
+      document.getElementById('themeInputArea').style.display = 'block';
+      startBtn.textContent = "お題を決定して次へ";
     } else {
       gamePhaseInfo.textContent = 'ホストがお題を入力するのを待っています...';
       startGameBtn.style.display = 'none';
     }
   } 
-  // フェーズ2: 単語入力中（全プレイヤー：単語入力、ホスト：全員完了待ち）
+  // フェーズ2: 単語入力中
   else if (gameStatus.state === 'wordInput') {
+    document.getElementById('themeInputArea').style.display = 'none';
+
     if (!isAPlayer) {
       gamePhaseInfo.textContent = '観戦中：プレイヤーの単語入力を待っています...';
       wordInputPhase.style.display = 'none';
       startGameBtn.style.display = 'none';
       return;
     }
-
     const meReady = wordInputState[me.uid] && wordInputState[me.uid].ready;
-    
-    // 自分が入力済みならフォームを隠す（モバイルでの視認性向上）
-    wordInputPhase.style.display = meReady ? 'none' : 'block';
-    
     const readyCount = playerIds.filter(id => wordInputState[id]?.ready).length;
-    
-    if (playerIds.length < GAME_CONFIG.MIN_PLAYERS) {
-      gamePhaseInfo.textContent = `他のプレイヤーを待っています (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)`;
-      startGameBtn.style.display = 'none';
-    } else if (readyCount === playerIds.length) {
+
+    if (readyCount === playerIds.length && playerIds.length >= GAME_CONFIG.MIN_PLAYERS) {
       // 全員の単語が決まった
       gamePhaseInfo.textContent = isHost ? '全員完了！バトルを開始してください' : 'ホストがバトルを開始するのを待っています...';
       if (isHost) {
         startGameBtn.style.display = 'block';
-        document.getElementById('themeInputArea').style.display = 'none'; // お題入力は済んでいるので隠す
+        startBtn.textContent = "バトル開始！";
       }
+      wordInputPhase.style.display = 'none';
     } else {
       startGameBtn.style.display = 'none';
-      gamePhaseInfo.textContent = meReady ? '他のプレイヤーの単語入力を待っています…' : '単語入力を待っています…';
+      wordInputPhase.style.display = meReady ? 'none' : 'block';
+      
+      if (playerIds.length < GAME_CONFIG.MIN_PLAYERS) {
+        gamePhaseInfo.textContent = `他のプレイヤーを待っています (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)`;
+      } else {
+        gamePhaseInfo.textContent = meReady ? '他のプレイヤーの入力を待っています…' : 'あなたの単語を入力してください';
+      }
     }
   } 
   // フェーズ3: バトル中
@@ -407,21 +415,8 @@ function checkReadyToStart(){
 }
 
 // ================== UI描画関数 ==================
-// 【プレイヤー表示】プレイヤーリストと準備状況を画面に描画
 function renderPlayers(p){
-  playersDiv.innerHTML = '';
-  for(const pid in p){
-    const pl = p[pid];
-    const el = document.createElement('div');
-    el.className = 'player';
-    const ready = wordInputState[pid] && wordInputState[pid].ready;
-    let status = ready ? '✓準備完了' : '準備中...';
-    if (gameStatus && gameStatus.state === 'wordInput' && !ready) {
-      status = '単語入力中...';
-    }
-    el.innerHTML = `<strong>${getDisplayName(pid)}</strong><div>${status}</div>`;
-    playersDiv.appendChild(el);
-  }
+  // 廃止：renderBoardsに統合
 }
 
 // 【ボード表示】各プレイヤーの単語ボードを描画（×は自分のボードのみ表示）
@@ -436,9 +431,20 @@ function renderBoards(b){
     const isDefeated = players[pid]?.defeated;
     wrap.className = `player ${isMyBoard ? 'my-board' : ''} ${isCurrentTurn ? 'active-turn' : ''} ${isDefeated ? 'defeated' : ''}`;
 
-    let headerText = isMyBoard ? '★ あなた' : getDisplayName(pid);
-    if (isCurrentTurn && gameStatus.state === 'playing') headerText += ' ⚔️攻撃中';
-    wrap.innerHTML = `<div><strong>${headerText}</strong></div>`;
+    // ステータス情報の構築
+    let statusText = "";
+    if (gameStatus.state === 'waiting' || gameStatus.state === 'wordInput') {
+      const ready = wordInputState[pid] && wordInputState[pid].ready;
+      statusText = ready ? ' ✓準備完了' : ' ...入力中';
+    } else if (isDefeated) {
+      statusText = ' [脱落]';
+    } else if (isCurrentTurn && gameStatus.state === 'playing') {
+      statusText = ' ⚔️攻撃中';
+    }
+    
+    const nameWithAttributes = getDisplayName(pid);
+    const headerHTML = `<div class="player-header" style="font-size: 13px; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 4px;"><strong>${nameWithAttributes}${statusText}</strong></div>`;
+    wrap.innerHTML = headerHTML;
     const boardDiv = document.createElement('div');
     boardDiv.className = 'board';
     
@@ -571,12 +577,12 @@ function setupOnDisconnect(rRef) {
 }
 
 // 【ヒット演出】指定した文字を五十音表の上に大きく表示
-function showHitEffect(char) {
+function showHitEffect(char, type) {
   const container = document.getElementById('charSelector');
   if (!container) return;
 
   const effect = document.createElement('div');
-  effect.className = 'hit-effect-char';
+  effect.className = `hit-effect-char ${type}`;
   effect.textContent = char;
   
   container.appendChild(effect);
@@ -877,6 +883,7 @@ async function attackWithChar(char) {
     
     // ========== ステップ3: 各ボードで文字を検索・公開 ==========
     let otherHit = false; // 他プレイヤーへのヒット判定
+    let victimIds = [];
     const currentPlayersSnap = await roomRef.child('players').once('value');
     const currentPlayers = currentPlayersSnap.val() || {};
     
@@ -896,6 +903,7 @@ async function attackWithChar(char) {
         if (chars[i] === char && !revealed[i]) {
           revealed[i] = true;
           hitOnThisBoard = true;
+          if (!victimIds.includes(pid)) victimIds.push(pid);
           if (pid !== me.uid) {
             otherHit = true; // 他プレイヤーへのヒット
           }
@@ -922,11 +930,13 @@ async function attackWithChar(char) {
       }
     }
     
-    // 攻撃成功のビジュアル表示
-    if (otherHit) {
-      log(`🎯 攻撃成功！「${char}」を公開させました！`);
-      showHitEffect(char);
-    }
+    // 演出用データをFirebaseに更新（全プレイヤーで同期）
+    await roomRef.child('game/lastHit').set({
+      char: char,
+      attackerId: me.uid,
+      victimIds: victimIds,
+      ts: Date.now()
+    });
 
     // ========== ステップ6: 勝者判定 ==========
     const latestPlayersSnapForEnd = await roomRef.child('players').once('value');
