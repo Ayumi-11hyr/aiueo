@@ -31,7 +31,7 @@ header h1 { margin: 0; }
 #startGameBtn button { padding: 10px 20px; background: #06c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
 #startGameBtn button:hover { background: #0088cc; }
 #controls { margin-top: 12px; }
-#charSelector { margin-top: 12px; padding: 12px; background: #fffacd; border-radius: 4px; position: relative; overflow: hidden; }
+#charSelector { margin-top: 12px; padding: 12px; background: #fffacd; border-radius: 4px; position: relative; overflow: visible; }
 #charSelector.not-my-turn { background: #f0f0f0; opacity: 0.8; }
 #kanaButtons { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-top: 8px; max-width: 100%; }
 #kanaButtons button { padding: 8px; font-size: 14px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
@@ -50,31 +50,32 @@ header h1 { margin: 0; }
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 120px;
+  font-size: min(20vw, 100px);
   font-weight: bold;
   pointer-events: none;
   z-index: 100;
-  -webkit-text-stroke: 2px #fff;
+  -webkit-text-stroke: 1.5px #fff;
+  text-shadow: 0 0 10px rgba(0,0,0,0.2);
 }
 
 /* 攻撃成功時：緑色でポップに広がる */
 .hit-effect-char.success {
-  color: #00c853;
-  text-shadow: 0 0 20px rgba(0, 200, 83, 0.6);
+  color: #2e7d32;
+  text-shadow: 0 0 15px rgba(255, 255, 255, 0.8), 0 0 25px rgba(46, 125, 50, 0.5);
   animation: hit-success 0.8s ease-out forwards;
 }
 
 /* ダメージ時：赤色で激しく揺れる */
 .hit-effect-char.damage {
-  color: #d50000;
-  text-shadow: 0 0 20px rgba(213, 0, 0, 0.8);
+  color: #c62828;
+  text-shadow: 0 0 15px rgba(255, 255, 255, 0.8), 0 0 25px rgba(198, 40, 40, 0.6);
   animation: hit-damage 0.8s ease-in-out forwards;
 }
 
 @keyframes hit-success {
-  0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
-  30% { transform: translate(-50%, -50%) scale(1.8); opacity: 1; }
-  100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+  0% { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+  30% { transform: translate(-50%, -50%) scale(1.5); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(2.0); opacity: 0; }
 }
 
 @keyframes hit-damage {
@@ -109,7 +110,7 @@ header h1 { margin: 0; }
 @media (max-width: 600px) {
   #lobby > div:nth-child(2) { grid-template-columns: 1fr !important; }
   #startGameBtn input { margin-bottom: 10px; }
-  .cell { width: 24px; height: 32px; font-size: 16px; }
+  .cell { width: 22px; height: 30px; font-size: 14px; } /* 10文字でも2列に収まりやすく調整 */
   #boardArea { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   #kanaButtons button { padding: 6px 2px; font-size: 12px; }
   header h1 { font-size: 20px; }

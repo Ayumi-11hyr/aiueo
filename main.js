@@ -2,7 +2,7 @@
 // ゲームバランスに関する定数
 const GAME_CONFIG = {
   MIN_WORD_LENGTH: 2,           // 単語の最小文字数
-  MAX_WORD_LENGTH: 7,           // 単語の最大文字数
+  MAX_WORD_LENGTH: 10,          // 単語の最大文字数（2～10文字に対応）
   BOARD_PADDING_CHAR: 'x',      // パディング文字（表示されない）
   TURN_TIME_LIMIT: 30,          // ターンの制限時間（秒）
   MAX_ATTACKS_PER_TURN: 2,      // 1ターンの最大攻撃回数
@@ -320,15 +320,19 @@ function listenRoom(rRef){
     isHost = (data.hostId === me.uid || (data.game && data.game.hostId === me.uid));
 
     // 演出の同期チェック
-    const lastHit = gameStatus.lastHit;
-    if (lastHit && lastHit.ts > lastEffectTs) {
+    if (gameStatus.lastHit && gameStatus.lastHit.ts > lastEffectTs) {
+      const lastHit = gameStatus.lastHit;
       lastEffectTs = lastHit.ts;
-      const victimList = Array.isArray(lastHit.victimIds) ? lastHit.victimIds : Object.values(lastHit.victimIds || {});
-      const isMeVictim = victimList.includes(me.uid);
-      const isMeAttacker = lastHit.attackerId === me.uid;
       
-      if (isMeVictim) showHitEffect(lastHit.char, 'damage');
-      else if (victimList.length > 0) showHitEffect(lastHit.char, 'success');
+      // Firebaseが配列をオブジェクト化する場合があるため、配列に変換して判定
+      const victimList = Array.isArray(lastHit.victimIds) ? lastHit.victimIds : Object.values(lastHit.victimIds || {});
+      const isMeVictim = me.uid && victimList.includes(me.uid);
+      
+      if (isMeVictim) {
+        showHitEffect(lastHit.char, 'damage');
+      } else if (victimList.length > 0) {
+        showHitEffect(lastHit.char, 'success');
+      }
     }
 
     // UI描画とゲームロジックの判定を同期して実行
@@ -570,10 +574,13 @@ function renderGame(g){
 // 【切断時処理】プレイヤーが通信終了した際にデータを自動クリーンアップ
 function setupOnDisconnect(rRef) {
   if (!me.uid) return;
-  // 自分が切断したとき、各ノードから自分のデータを削除するように予約
-  rRef.child(`players/${me.uid}`).onDisconnect().remove();
-  rRef.child(`wordInputState/${me.uid}`).onDisconnect().remove();
-  rRef.child(`boards/${me.uid}`).onDisconnect().remove();
+  // 【注意】モバイル版ではバックグラウンド移行時に即座に切断されるため、
+  // 自動削除（onDisconnect().remove()）は行わないようにします。
+  // 代わりに、leaveBtn（退室ボタン）による明示的な削除を利用します。
+  
+  // rRef.child(`players/${me.uid}`).onDisconnect().remove();
+  // rRef.child(`wordInputState/${me.uid}`).onDisconnect().remove();
+  // rRef.child(`boards/${me.uid}`).onDisconnect().remove();
 }
 
 // 【ヒット演出】指定した文字を五十音表の上に大きく表示
@@ -586,8 +593,8 @@ function showHitEffect(char, type) {
   effect.textContent = char;
   
   container.appendChild(effect);
-  // アニメーション終了後に要素を削除
-  setTimeout(() => effect.remove(), 800);
+  // アニメーション終了後に要素を削除（800msの演出に余裕を持たせる）
+  setTimeout(() => effect.remove(), 1000);
 }
 
 // 【文字ボタン状態制御】使用済み文字を非表示、自分の番でない時は操作不可
@@ -606,7 +613,7 @@ function updateKanaButtons(usedChars = {}, isMyTurn = false, isMeDefeated = fals
 
 // ================== ゲームアクション ==================
 // 【単語登録】ひらがなテキストを正規化・パディングしてボードを作成
-// 2～7文字の制限をチェックし、不正な長さの場合は登録を拒否
+// 2～10文字の制限をチェックし、不正な長さの場合は登録を拒否
 submitWord.onclick = async () => {
   try {
     const raw = wordInput.value.trim();
