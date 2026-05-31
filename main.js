@@ -266,13 +266,21 @@ joinBtn.onclick = async () => {
       return;
     }
     
-    await r.child(`players/${me.uid}`).set({
-      displayName: me.name,
-      joinedAt: Date.now()
-    });
+    const data = snap.val();
+    const gameState = (data.game && data.game.state) || 'waiting';
+
+    // バトル開始後（playing または ended）にアクセスした場合はプレイヤー登録をせず観戦モードとする
+    if (gameState === 'playing' || gameState === 'ended') {
+      log(`ゲームが進行中のため、観戦モードで参加しました`);
+    } else {
+      await r.child(`players/${me.uid}`).set({
+        displayName: me.name,
+        joinedAt: Date.now()
+      });
+      log(`ルーム ${id} に参加しました`);
+    }
     
     showRoom(id);
-    log(`ルーム ${id} に参加しました`);
   } catch (err) {
     console.error('ルーム参加エラー:', err);
     alert('ルーム参加に失敗しました。もう一度お試しください。');
@@ -337,43 +345,59 @@ function listenRoom(rRef){
 // 各フェーズで必要な条件をチェックし、UIを更新
 function checkReadyToStart(){
   const playerIds = Object.keys(players);
+  const isAPlayer = !!players[me.uid]; // 自分がプレイヤーリストに含まれているか
   
   // フェーズ1: 待機中（ホスト：お題入力待ち、プレイヤー：ホスト待ち）
   if (gameStatus.state === 'waiting') {
     if (isHost) {
       const hasEnoughPlayers = playerIds.length >= GAME_CONFIG.MIN_PLAYERS;
-      gamePhaseInfo.textContent = hasEnoughPlayers 
-        ? '人数がそろいました。お題を入力して開始してください。' 
-        : `参加待ち (${playerIds.length}人)...`;
+      if (hasEnoughPlayers) {
+        gamePhaseInfo.textContent = '人数がそろいました。お題を入力して開始してください。';
+      } else {
+        gamePhaseInfo.textContent = `参加待ち (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)...`;
+      }
       startGameBtn.style.display = 'block';
     } else {
-      gamePhaseInfo.textContent = 'ホストがお題を入力するのを待っています…';
+      gamePhaseInfo.textContent = 'ホストがお題を入力するのを待っています...';
       startGameBtn.style.display = 'none';
     }
   } 
   // フェーズ2: 単語入力中（全プレイヤー：単語入力、ホスト：全員完了待ち）
   else if (gameStatus.state === 'wordInput') {
+    if (!isAPlayer) {
+      gamePhaseInfo.textContent = '観戦中：プレイヤーの単語入力を待っています...';
+      wordInputPhase.style.display = 'none';
+      startGameBtn.style.display = 'none';
+      return;
+    }
+
     const meReady = wordInputState[me.uid] && wordInputState[me.uid].ready;
     
     // 自分が入力済みならフォームを隠す（モバイルでの視認性向上）
     wordInputPhase.style.display = meReady ? 'none' : 'block';
     
-    const readyCount = playerIds.filter(id => wordInputState[id] && wordInputState[id].ready).length;
+    const readyCount = playerIds.filter(id => wordInputState[id]?.ready).length;
     
-    startGameBtn.style.display = 'none';
-
-    // 全員の単語が決まったか確認
-    if (readyCount === playerIds.length && playerIds.length >= GAME_CONFIG.MIN_PLAYERS) {
-      gamePhaseInfo.textContent = isHost ? '全員の単語が決まりました！' : 'ホストがバトルを開始するのを待っています...';
-      if (isHost) startGameBtn.style.display = 'block';
+    if (playerIds.length < GAME_CONFIG.MIN_PLAYERS) {
+      gamePhaseInfo.textContent = `他のプレイヤーを待っています (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)`;
+      startGameBtn.style.display = 'none';
+    } else if (readyCount === playerIds.length) {
+      // 全員の単語が決まった
+      gamePhaseInfo.textContent = isHost ? '全員完了！バトルを開始してください' : 'ホストがバトルを開始するのを待っています...';
+      if (isHost) {
+        startGameBtn.style.display = 'block';
+        document.getElementById('themeInputArea').style.display = 'none'; // お題入力は済んでいるので隠す
+      }
     } else {
+      startGameBtn.style.display = 'none';
       gamePhaseInfo.textContent = meReady ? '他のプレイヤーの単語入力を待っています…' : '単語入力を待っています…';
     }
   } 
   // フェーズ3: バトル中
   else if (gameStatus.state === 'playing') {
     const currentPlayerName = getDisplayName(gameStatus.currentTurnPlayerId);
-    gamePhaseInfo.textContent = `${currentPlayerName}が文字を選択中…`;
+    const prefix = isAPlayer ? '' : '【観戦中】';
+    gamePhaseInfo.textContent = `${prefix}${currentPlayerName}が文字を選択中…`;
     startGameBtn.style.display = 'none';
   } 
   // フェーズ4: バトル終了
@@ -403,15 +427,16 @@ function renderPlayers(p){
 // 【ボード表示】各プレイヤーの単語ボードを描画（×は自分のボードのみ表示）
 function renderBoards(b){
   boardArea.innerHTML = '';
-  for(const pid in b){
-    const board = b[pid];
+  // boards（データがある人）ではなく players（全員）を基準にループ
+  for(const pid in players){
+    const board = b[pid] || { chars: [], revealed: [] };
     const wrap = document.createElement('div');
     const isMyBoard = pid === me.uid;
     const isCurrentTurn = pid === gameStatus.currentTurnPlayerId;
-    const isDefeated = players[pid] && players[pid].defeated;
+    const isDefeated = players[pid]?.defeated;
     wrap.className = `player ${isMyBoard ? 'my-board' : ''} ${isCurrentTurn ? 'active-turn' : ''} ${isDefeated ? 'defeated' : ''}`;
 
-    let headerText = isMyBoard ? '★ あなたの単語' : getDisplayName(pid);
+    let headerText = isMyBoard ? '★ あなた' : getDisplayName(pid);
     if (isCurrentTurn && gameStatus.state === 'playing') headerText += ' ⚔️攻撃中';
     wrap.innerHTML = `<div><strong>${headerText}</strong></div>`;
     const boardDiv = document.createElement('div');
@@ -419,6 +444,15 @@ function renderBoards(b){
     
     const chars = board.chars || [];
     const revealed = board.revealed || [];
+
+    // 単語が未入力の場合の表示
+    if (chars.length === 0) {
+      const msg = document.createElement('div');
+      msg.style.fontSize = '12px';
+      msg.style.marginTop = '10px';
+      msg.textContent = (gameStatus.state === 'playing') ? '（未参加）' : '入力中...';
+      boardDiv.appendChild(msg);
+    }
     
     for(let i = 0; i < chars.length; i++){
       const cell = document.createElement('div');
@@ -451,6 +485,7 @@ function renderBoards(b){
 // 【ゲーム状態表示】ゲーム段階（待機→単語入力→バトル→終了）に応じて表示内容を切り替え
 function renderGame(g){
   if(!g || Object.keys(g).length === 0) return;
+  const isAPlayer = !!players[me.uid];
   
   // バトル中(playing)は退室不可、それ以外は表示
   leaveBtn.style.display = (g.state === 'playing') ? 'none' : 'inline-block';
