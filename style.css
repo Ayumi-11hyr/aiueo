@@ -72,10 +72,23 @@ header h1 { margin: 0; }
   animation: hit-damage 0.8s ease-in-out forwards;
 }
 
+/* 攻撃失敗時（ミス）：グレーで小さく跳ねる */
+.hit-effect-char.miss {
+  color: #757575;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+  animation: hit-miss 0.6s ease-in-out forwards;
+}
+
 @keyframes hit-success {
   0% { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
   30% { transform: translate(-50%, -50%) scale(1.5); opacity: 1; }
   100% { transform: translate(-50%, -50%) scale(2.0); opacity: 0; }
+}
+
+@keyframes hit-miss {
+  0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+  20% { transform: translate(-50%, -60%) scale(1.1); opacity: 1; }
+  100% { transform: translate(-50%, -40%) scale(1.0); opacity: 0; }
 }
 
 @keyframes hit-damage {

@@ -332,6 +332,8 @@ function listenRoom(rRef){
         showHitEffect(lastHit.char, 'damage');
       } else if (victimList.length > 0) {
         showHitEffect(lastHit.char, 'success');
+      } else {
+        showHitEffect(lastHit.char, 'miss');
       }
     }
 
@@ -403,6 +405,14 @@ function checkReadyToStart(){
       } else {
         gamePhaseInfo.textContent = meReady ? '他のプレイヤーの入力を待っています…' : 'あなたの単語を入力してください';
       }
+    }
+
+    // プレイヤーであれば常に単語入力エリアを表示し、後から変更可能にする
+    wordInputPhase.style.display = 'block';
+    submitWord.textContent = meReady ? '単語を変更する' : 'OK';
+    // ページ更新時などにデータがある場合は入力を復元
+    if (meReady && !wordInput.value && wordInputState[me.uid].word) {
+      wordInput.value = wordInputState[me.uid].word;
     }
   } 
   // フェーズ3: バトル中
@@ -506,6 +516,7 @@ function renderGame(g){
     resetGameBtn.style.display = 'none';
     themeArea.style.display = 'none';
     turnInfo.innerHTML = ''; // メッセージをクリア
+    wordInput.value = '';    // 新規ゲームのために単語入力をリセット
     stopTurnTimer();
     document.getElementById('themeInputArea').style.display = 'block';
   }
@@ -649,6 +660,7 @@ submitWord.onclick = async () => {
     await roomRef.child(`wordInputState/${me.uid}`).set({ ready: true, word: norm });
     
     wordInput.value = '';
+    // wordInput.value = ''; // 変更しやすくするため、入力値は残しておく
     log(`単語登録: ${norm} (${norm.length}文字)`);
   } catch (err) {
     console.error('単語登録エラー:', err);
