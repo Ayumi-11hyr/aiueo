@@ -354,6 +354,10 @@ function checkReadyToStart(){
   // フェーズ2: 単語入力中（全プレイヤー：単語入力、ホスト：全員完了待ち）
   else if (gameStatus.state === 'wordInput') {
     const meReady = wordInputState[me.uid] && wordInputState[me.uid].ready;
+    
+    // 自分が入力済みならフォームを隠す（モバイルでの視認性向上）
+    wordInputPhase.style.display = meReady ? 'none' : 'block';
+    
     const readyCount = playerIds.filter(id => wordInputState[id] && wordInputState[id].ready).length;
     
     startGameBtn.style.display = 'none';
@@ -464,7 +468,6 @@ function renderGame(g){
   if(g.state === 'wordInput') {
     themeArea.style.display = g.theme ? 'block' : 'none';
     themeDisplay.textContent = g.theme || '';
-    wordInputPhase.style.display = 'block';
     controls.style.display = 'none';
     charSelector.style.display = 'none';
     resetGameBtn.style.display = 'none';
