@@ -21,9 +21,11 @@ const firebaseConfig = {
   appId: "1:676162956272:web:928dc9f2af9359cf06cb35",
   measurementId: "G-5LWV6K3TWQ"
 };
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.database();
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const auth = window.aiueoFirebase?.auth || firebase.auth();
+const db = window.aiueoFirebase?.db || firebase.database();
 
 // ================== 日本語正規化ユーティリティ ==================
 // 入力された日本語を統一形式に変換：濁点・半濁点を無視、小文字→大文字に統一
@@ -65,6 +67,7 @@ let players = {};
 let boards = {};
 let timerInterval = null; // ターンの制限時間用タイマー
 let lastEffectTs = Date.now(); // 起動時以降の演出のみ表示
+let lastTimeoutKey = null;
 const kanaTable = [
   'わ','ら','や','ま','は','な','た','さ','か','あ',
   'を','り','','み','ひ','に','ち','し','き','い',
@@ -103,18 +106,78 @@ const controls = document.getElementById('controls');
 const resetGameBtn = document.getElementById('resetGameBtn');
 const charSelector = document.getElementById('charSelector');
 const kanaButtons = document.getElementById('kanaButtons');
+const { getNextActivePlayerId } = window.AiueoGameLogic || {};
 
 // ================== ヘルパー関数 ==================
-// プレイヤーIDを非公開にし、表示名を整形して返す（自分やホストの情報を付加）
+// プレイヤーIDを非公開にし、表示名を整形して返す
 function getDisplayName(pid) {
   if (!pid || !players[pid]) return '不明';
-  const name = players[pid].displayName || '名無し';
-  
-  let displayName = name;
-  if (pid === me.uid) displayName += ' ★あなた';
-  if (gameStatus && pid === gameStatus.hostId) displayName += ' [ホスト]';
-  
-  return displayName;
+  return players[pid].displayName || '名無し';
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getPlayerBadges(pid) {
+  if (!pid || !players[pid]) return '';
+
+  const badges = [];
+  if (pid === me.uid) {
+    badges.push('<span class="player-badge you-badge">あなた</span>');
+  }
+  if (gameStatus && pid === gameStatus.hostId) {
+    badges.push('<span class="player-badge host-badge">ホスト</span>');
+  }
+
+  return badges.length ? `<div class="player-badges">${badges.join('')}</div>` : '';
+}
+
+function getActivePlayerIds(playerState = players) {
+  return Object.keys(playerState || {}).filter(id => !playerState[id]?.defeated);
+}
+
+async function advanceTurn() {
+  if (!roomRef) return false;
+
+  const latestPlayersSnap = await roomRef.child('players').once('value');
+  const latestPlayers = latestPlayersSnap.val() || {};
+  const activePlayerIds = getActivePlayerIds(latestPlayers);
+  if (activePlayerIds.length === 0) return false;
+
+  const gameSnap = await roomRef.child('game').once('value');
+  const currentGame = gameSnap.val() || {};
+  const expectedTurnVersion = currentGame.turnVersion || 0;
+  const currentTurnPlayerId = currentGame.currentTurnPlayerId || activePlayerIds[0];
+  const nextPlayerId = getNextActivePlayerId(activePlayerIds, currentTurnPlayerId);
+
+  if (!nextPlayerId) return false;
+
+  const result = await roomRef.child('game').transaction(currentGameData => {
+    if (!currentGameData || currentGameData.state !== 'playing') {
+      return currentGameData;
+    }
+
+    if ((currentGameData.turnVersion || 0) !== expectedTurnVersion) {
+      return currentGameData;
+    }
+
+    return {
+      ...currentGameData,
+      state: 'playing',
+      currentTurnPlayerId: nextPlayerId,
+      attackCount: 0,
+      turnStartedAt: Date.now(),
+      turnVersion: (currentGameData.turnVersion || 0) + 1
+    };
+  });
+
+  return result.committed;
 }
 
 // ルームIDをクリップボードにコピー
@@ -131,495 +194,61 @@ copyRoomIdBtn.onclick = async () => {
 
 // 【ルーム退室】自身のデータを削除し、自身がホストなら次の人に権限を譲渡
 leaveBtn.onclick = async () => {
-  if (!currentRoom || !roomRef) return;
-  if (!confirm("ルームを退室しますか？")) return;
-
-  try {
-    // 最新のルームデータを取得して、引き継ぎ先を決定
-    const snap = await roomRef.once('value');
-    const data = snap.val();
-    if (!data) return;
-
-    const updates = {};
-    updates[`players/${me.uid}`] = null;
-    updates[`wordInputState/${me.uid}`] = null;
-    updates[`boards/${me.uid}`] = null;
-
-    // 自分がホストかつ他にもプレイヤーがいる場合、最初の人に引き継ぐ
-    const otherIds = Object.keys(data.players || {}).filter(id => id !== me.uid);
-    if (data.game?.hostId === me.uid && otherIds.length > 0) {
-      const nextHostId = otherIds[0];
-      updates['hostId'] = nextHostId;
-      updates['game/hostId'] = nextHostId;
-    }
-
-    // サーバー側の切断時処理をキャンセルして即時実行
-    roomRef.child(`players/${me.uid}`).onDisconnect().cancel();
-    await roomRef.update(updates);
-    
-    // クライアント側の状態リセット
-    roomRef.off();
-    currentRoom = null;
-    roomRef = null;
-    isHost = false;
-
-    // UIを初期状態に戻す
-    game.style.display = 'none';
-    lobby.style.display = 'block';
-    roomInfo.style.display = 'none';
-    logDiv.textContent = '';
-    
-    // URLからルームパラメータを削除
-    const url = new URL(window.location.href);
-    url.searchParams.delete('room');
-    window.history.pushState({}, '', url);
-    log(`ルームを退室しました`);
-  } catch (err) {
-    console.error('退室エラー:', err);
-  }
+  await window.aiueoFirebase?.leaveRoom?.();
 };
 
 // ================== Firebase 認証 ==================
-// 匿名認証を行う（プレイヤーはID不要で参加可能）
-// エラーが発生した場合はコンソールに出力し、ユーザーに通知
-auth.signInAnonymously()
-  .catch(err => {
-    console.error('認証エラー:', err);
-    alert('認証に失敗しました。ページを再読み込みしてください。');
-  });
-
-// ユーザー認証状態の変化を監視
-auth.onAuthStateChanged(user => {
-  if (user) {
-    me.uid = user.uid;
-    log(`認証完了: ${user.uid.substring(0, 8)}...`);
-  } else {
-    console.warn('ユーザー認証が失敗しました');
-  }
-});
+window.aiueoFirebase?.initializeAuth?.();
 
 // ================== ルーム管理 ==================
-// 【ルーム作成】新規ルームを生成し、自身をホストとして登録
-// エラー時はアラートを表示して処理を中止
 createBtn.onclick = async () => {
-  try {
-    if (!me.uid) {
-      alert("認証中です。少々お待ちください。");
-      return;
-    }
-    
-    const name = nameInput.value.trim();
-    if (!name) {
-      alert("表示名を入力してください");
-      nameInput.focus();
-      return;
-    }
-    me.name = name;
-
-    const roomId = Math.random().toString(36).slice(2, 9);
-    const r = db.ref(`rooms/${roomId}`);
-    
-    // 初期ルームデータを一括設定
-    await r.set({
-      hostId: me.uid,
-      createdAt: Date.now(),
-      game: {
-        state: 'waiting',
-        hostId: me.uid
-      },
-      players: {
-        [me.uid]: {
-          displayName: me.name,
-          joinedAt: Date.now()
-        }
-      }
-    });
-    
-    showRoom(roomId);
-    log(`ルーム作成完了: ${roomId}`);
-  } catch (err) {
-    console.error('ルーム作成エラー:', err);
-    alert('ルーム作成に失敗しました。もう一度お試しください。');
-  }
+  await window.aiueoFirebase?.createRoom?.();
 };
 
-// 【ルーム参加】既存ルームに自身をプレイヤーとして参加
-// ルームが存在しない、または通信エラーの場合はアラート
 joinBtn.onclick = async () => {
-  try {
-    const name = nameInput.value.trim();
-    if (!name) {
-      alert("表示名を入力してください");
-      nameInput.focus();
-      return;
-    }
-    me.name = name;
-
-    const id = joinRoomId.value.trim();
-    if (!id) {
-      alert("ルームIDを入力してください");
-      return;
-    }
-    
-    const r = db.ref(`rooms/${id}`);
-    const snap = await r.once('value');
-    if (!snap.exists()) {
-      alert("ルームが見つかりません。ルームIDを確認してください。");
-      return;
-    }
-    
-    const data = snap.val();
-    const gameState = (data.game && data.game.state) || 'waiting';
-
-    // バトル開始後（playing または ended）にアクセスした場合はプレイヤー登録をせず観戦モードとする
-    if (gameState === 'playing' || gameState === 'ended') {
-      log(`ゲームが進行中のため、観戦モードで参加しました`);
-    } else {
-      await r.child(`players/${me.uid}`).set({
-        displayName: me.name,
-        joinedAt: Date.now()
-      });
-      log(`ルーム ${id} に参加しました`);
-    }
-    
-    showRoom(id);
-  } catch (err) {
-    console.error('ルーム参加エラー:', err);
-    alert('ルーム参加に失敗しました。もう一度お試しください。');
-  }
+  await window.aiueoFirebase?.joinRoom?.();
 };
 
-// 【ルーム入室】ゲーム画面を表示し、Firebase リスナーを開始
-function showRoom(roomId){
-  currentRoom = roomId;
-  lobby.style.display = 'none';
-  game.style.display = 'block';
-  roomLink.textContent = `招待リンク: ${location.origin + location.pathname}?room=${roomId}`;
-  roomInfo.style.display = 'block';
-  roomNumber.textContent = roomId;
-  roomRef = db.ref(`rooms/${roomId}`);
-  generateKanaButtons();
-  listenRoom(roomRef); // リアルタイム監視を開始
+leaveBtn.onclick = async () => {
+  await window.aiueoFirebase?.leaveRoom?.();
+};
+
+function showRoom(roomId) {
+  return window.aiueoFirebase?.showRoom?.(roomId);
 }
 
-// ================== Firebase リアルタイム監視 ==================
-// 【ルーム監視】Firebaseのリスナーを設定し、ゲーム状態の変更をリアルタイムで反映
-// 複数のパスを監視し、状態変化に応じてUI更新を実行
-function listenRoom(rRef){
-  // ルーム全体のデータを一括で監視し、状態の同期とUI更新を行う
-  rRef.on('value', snap => {
-    const data = snap.val() || {};
-    
-    // グローバル状態を同期（各リスナー間のレースコンディションを防止）
-    players = data.players || {};
-    boards = data.boards || {};
-    wordInputState = data.wordInputState || {};
-    gameStatus = data.game || {};
-    
-    // ホスト判定を更新（ルーム直下またはgame直下のhostIdを参照）
-    isHost = (data.hostId === me.uid || (data.game && data.game.hostId === me.uid));
-
-    // 演出の同期チェック
-    if (gameStatus.lastHit && gameStatus.lastHit.ts > lastEffectTs) {
-      const lastHit = gameStatus.lastHit;
-      lastEffectTs = lastHit.ts;
-      
-      // Firebaseが配列をオブジェクト化する場合があるため、配列に変換して判定
-      const victimList = Array.isArray(lastHit.victimIds) ? lastHit.victimIds : Object.values(lastHit.victimIds || {});
-      const isMeVictim = me.uid && victimList.includes(me.uid);
-      
-      if (isMeVictim) {
-        showHitEffect(lastHit.char, 'damage');
-      } else if (victimList.length > 0) {
-        showHitEffect(lastHit.char, 'success');
-      } else {
-        showHitEffect(lastHit.char, 'miss');
-      }
-    }
-
-    // UI描画とゲームロジックの判定を同期して実行
-    renderBoards(boards);
-    renderGame(gameStatus);
-    checkReadyToStart();
-    checkGameEnd();
-  });
-
-  // 切断時の自動削除を設定
-  setupOnDisconnect(rRef);
+function listenRoom(rRef) {
+  return window.aiueoFirebase?.listenRoom?.(rRef);
 }
 
 // ================== ゲーム状態遷移制御 ==================
-// 【準備状況判定】現在のゲーム段階に応じて、開始ボタン表示と情報メッセージを制御
-// 各フェーズで必要な条件をチェックし、UIを更新
-function checkReadyToStart(){
-  if (!gameStatus || !gameStatus.state) return;
-
-  const playerIds = Object.keys(players);
-  const isAPlayer = !!players[me.uid]; // 自分がプレイヤーリストに含まれているか
-  
-  // フェーズ1: 待機中（ホスト：お題入力待ち、プレイヤー：ホスト待ち）
-  if (gameStatus.state === 'waiting') {
-    wordInputPhase.style.display = 'none';
-    if (isHost) {
-      const hasEnoughPlayers = playerIds.length >= GAME_CONFIG.MIN_PLAYERS;
-      if (hasEnoughPlayers) {
-        gamePhaseInfo.textContent = '人数がそろいました。お題を入力して開始してください。';
-      } else {
-        gamePhaseInfo.textContent = `参加待ち (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)... 揃わなくても開始できます。`;
-      }
-      startGameBtn.style.display = 'block';
-      document.getElementById('themeInputArea').style.display = 'block';
-      startBtn.textContent = "お題を決定して次へ";
-    } else {
-      gamePhaseInfo.textContent = 'ホストがお題を入力するのを待っています...';
-      startGameBtn.style.display = 'none';
-    }
-  } 
-  // フェーズ2: 単語入力中
-  else if (gameStatus.state === 'wordInput') {
-    document.getElementById('themeInputArea').style.display = 'none';
-
-    if (!isAPlayer) {
-      gamePhaseInfo.textContent = '観戦中：プレイヤーの単語入力を待っています...';
-      wordInputPhase.style.display = 'none';
-      startGameBtn.style.display = 'none';
-      return;
-    }
-    const meReady = wordInputState[me.uid] && wordInputState[me.uid].ready;
-    const readyCount = playerIds.filter(id => wordInputState[id]?.ready).length;
-
-    if (readyCount === playerIds.length && playerIds.length >= GAME_CONFIG.MIN_PLAYERS) {
-      // 全員の単語が決まった
-      gamePhaseInfo.textContent = isHost ? '全員完了！バトルを開始してください' : 'ホストがバトルを開始するのを待っています...';
-      if (isHost) {
-        startGameBtn.style.display = 'block';
-        startBtn.textContent = "バトル開始！";
-      }
-      wordInputPhase.style.display = 'none';
-    } else {
-      startGameBtn.style.display = 'none';
-      wordInputPhase.style.display = meReady ? 'none' : 'block';
-      
-      if (playerIds.length < GAME_CONFIG.MIN_PLAYERS) {
-        gamePhaseInfo.textContent = `他のプレイヤーを待っています (${playerIds.length}/${GAME_CONFIG.MIN_PLAYERS}人)`;
-      } else {
-        gamePhaseInfo.textContent = meReady ? '他のプレイヤーの入力を待っています…' : 'あなたの単語を入力してください';
-      }
-    }
-
-    // プレイヤーであれば常に単語入力エリアを表示し、後から変更可能にする
-    wordInputPhase.style.display = 'block';
-    submitWord.textContent = meReady ? '単語を変更する' : 'OK';
-    // ページ更新時などにデータがある場合は入力を復元
-    if (meReady && !wordInput.value && wordInputState[me.uid].word) {
-      wordInput.value = wordInputState[me.uid].word;
-    }
-  } 
-  // フェーズ3: バトル中
-  else if (gameStatus.state === 'playing') {
-    const currentPlayerName = getDisplayName(gameStatus.currentTurnPlayerId);
-    const prefix = isAPlayer ? '' : '【観戦中】';
-    gamePhaseInfo.textContent = `${prefix}${currentPlayerName}が文字を選択中…`;
-    startGameBtn.style.display = 'none';
-  } 
-  // フェーズ4: バトル終了
-  else if (gameStatus.state === 'ended') {
-    gamePhaseInfo.textContent = 'バトル終了！';
-  }
+function checkReadyToStart() {
+  return window.aiueoUi?.checkReadyToStart?.();
 }
 
 // ================== UI描画関数 ==================
-function renderPlayers(p){
+function renderPlayers(p) {
   // 廃止：renderBoardsに統合
 }
 
-// 【ボード表示】各プレイヤーの単語ボードを描画（×は自分のボードのみ表示）
-function renderBoards(b){
-  boardArea.innerHTML = '';
-  // boards（データがある人）ではなく players（全員）を基準にループ
-  for(const pid in players){
-    const board = b[pid] || { chars: [], revealed: [] };
-    const wrap = document.createElement('div');
-    const isMyBoard = pid === me.uid;
-    const isCurrentTurn = pid === gameStatus.currentTurnPlayerId;
-    const isDefeated = players[pid]?.defeated;
-    wrap.className = `player ${isMyBoard ? 'my-board' : ''} ${isCurrentTurn ? 'active-turn' : ''} ${isDefeated ? 'defeated' : ''}`;
-
-    // ステータス情報の構築
-    let statusText = "";
-    if (gameStatus.state === 'waiting' || gameStatus.state === 'wordInput') {
-      const ready = wordInputState[pid] && wordInputState[pid].ready;
-      statusText = ready ? ' ✓準備完了' : ' ...入力中';
-    } else if (isDefeated) {
-      statusText = ' [脱落]';
-    } else if (isCurrentTurn && gameStatus.state === 'playing') {
-      statusText = ' ⚔️攻撃中';
-    }
-    
-    const nameWithAttributes = getDisplayName(pid);
-    const headerHTML = `<div class="player-header" style="font-size: 13px; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 4px;"><strong>${nameWithAttributes}${statusText}</strong></div>`;
-    wrap.innerHTML = headerHTML;
-    const boardDiv = document.createElement('div');
-    boardDiv.className = 'board';
-    
-    const chars = board.chars || [];
-    const revealed = board.revealed || [];
-
-    // 単語が未入力の場合の表示
-    if (chars.length === 0) {
-      const msg = document.createElement('div');
-      msg.style.fontSize = '12px';
-      msg.style.marginTop = '10px';
-      msg.textContent = (gameStatus.state === 'playing') ? '（未参加）' : '入力中...';
-      boardDiv.appendChild(msg);
-    }
-    
-    for(let i = 0; i < chars.length; i++){
-      const cell = document.createElement('div');
-      cell.className = 'cell';
-      if(chars[i] === 'x' || chars[i] === undefined) {
-        // 「×」は自分のボード、またはその人が脱落した時に表示
-        if(isMyBoard || isDefeated) {
-          cell.textContent = '×';
-          cell.classList.add('cross');
-        }
-        // 相手ボードの「×」は何も表示しない
-      } else {
-        if (isMyBoard) {
-          // 自分のボードは常に文字を表示
-          cell.textContent = chars[i];
-          cell.classList.add(revealed[i] ? 'revealed' : 'my-hidden');
-        } else {
-          // 相手のボードは公開された時のみ表示
-          cell.textContent = revealed[i] ? chars[i] : '';
-          if(revealed[i]) cell.classList.add('revealed');
-        }
-      }
-      boardDiv.appendChild(cell);
-    }
-    wrap.appendChild(boardDiv);
-    boardArea.appendChild(wrap);
-  }
+function renderBoards(b) {
+  return window.aiueoUi?.renderBoards?.(b);
 }
 
-// 【ゲーム状態表示】ゲーム段階（待機→単語入力→バトル→終了）に応じて表示内容を切り替え
-function renderGame(g){
-  if(!g || Object.keys(g).length === 0) return;
-  const isAPlayer = !!players[me.uid];
-  
-  // バトル中(playing)は退室不可、それ以外は表示
-  leaveBtn.style.display = (g.state === 'playing') ? 'none' : 'inline-block';
-
-  if(g.state === 'waiting') {
-    wordInputPhase.style.display = 'none';
-    controls.style.display = 'none';
-    resetGameBtn.style.display = 'none';
-    themeArea.style.display = 'none';
-    turnInfo.innerHTML = ''; // メッセージをクリア
-    wordInput.value = '';    // 新規ゲームのために単語入力をリセット
-    stopTurnTimer();
-    document.getElementById('themeInputArea').style.display = 'block';
-  }
-
-  if(g.state === 'wordInput') {
-    themeArea.style.display = g.theme ? 'block' : 'none';
-    themeDisplay.textContent = g.theme || '';
-    controls.style.display = 'none';
-    charSelector.style.display = 'none';
-    resetGameBtn.style.display = 'none';
-    turnInfo.innerHTML = ''; // メッセージをクリア
-    updateKanaButtons(g.usedChars || {}, false, false);
-    stopTurnTimer();
-  } else if(g.state === 'playing') {
-    themeArea.style.display = g.theme ? 'block' : 'none';
-    themeDisplay.textContent = g.theme || '';
-    wordInputPhase.style.display = 'none';
-    controls.style.display = 'block';
-    charSelector.style.display = 'block'; // 五十音表は常に表示
-    renderBoards(boards);
-
-    const isMyTurn = g.currentTurnPlayerId === me.uid;
-    const isMeDefeated = players[me.uid] && players[me.uid].defeated;
-    charSelector.classList.toggle('not-my-turn', !isMyTurn);
-
-    // 指示テキストの制御：自分の番かつ脱落していない場合のみ表示
-    const charMsg = charSelector.querySelector('p');
-    if (charMsg) charMsg.style.visibility = (isMyTurn && !isMeDefeated) ? 'visible' : 'hidden';
-
-    resetGameBtn.style.display = 'none';
-    
-    updateKanaButtons(g.usedChars, isMyTurn, isMeDefeated);
-
-    if (isMeDefeated) {
-      turnInfo.innerHTML = '<div class="loser-msg">GAME OVER</div>';
-      turnInfo.innerHTML += `<div style="margin-top:8px;">あなたは脱落しました。他のプレイヤーの対戦を見守りましょう。</div>`;
-    } else {
-      const playerName = getDisplayName(g.currentTurnPlayerId);
-      const myTurnText = isMyTurn ? 'あなたの番' : `${playerName}の番`;
-      turnInfo.textContent = `${myTurnText} (攻撃回数: ${g.attackCount || 0}/2)`;
-    }
-    startTurnTimer(g.turnStartedAt);
-  } else if(g.state === 'ended') {
-    wordInputPhase.style.display = 'none';
-    controls.style.display = 'block';
-    charSelector.style.display = 'block'; // 終了後も使用済み文字を確認できる
-    charSelector.classList.add('not-my-turn');
-    const charMsg = charSelector.querySelector('p');
-    if (charMsg) charMsg.style.visibility = 'hidden';
-    updateKanaButtons(g.usedChars, false, true); // 全ボタンを無効化
-    stopTurnTimer();
-
-    if (g.winner === me.uid) {
-      turnInfo.innerHTML = '<div class="winner-msg">YOU WIN!</div>';
-    } else {
-      turnInfo.innerHTML = '<div class="loser-msg">GAME OVER</div>';
-    }
-    const winnerName = getDisplayName(g.winner);
-    turnInfo.innerHTML += `<div style="margin-top:8px;">勝者: ${winnerName}</div>`;
-    
-    // ホストのみリセットボタンを表示
-    resetGameBtn.style.display = isHost ? 'inline-block' : 'none';
-  }
+function renderGame(g) {
+  return window.aiueoUi?.renderGame?.(g);
 }
 
-// 【切断時処理】プレイヤーが通信終了した際にデータを自動クリーンアップ
 function setupOnDisconnect(rRef) {
-  if (!me.uid) return;
-  // 【注意】モバイル版ではバックグラウンド移行時に即座に切断されるため、
-  // 自動削除（onDisconnect().remove()）は行わないようにします。
-  // 代わりに、leaveBtn（退室ボタン）による明示的な削除を利用します。
-  
-  // rRef.child(`players/${me.uid}`).onDisconnect().remove();
-  // rRef.child(`wordInputState/${me.uid}`).onDisconnect().remove();
-  // rRef.child(`boards/${me.uid}`).onDisconnect().remove();
+  return window.aiueoFirebase?.setupOnDisconnect?.(rRef);
 }
 
-// 【ヒット演出】指定した文字を五十音表の上に大きく表示
 function showHitEffect(char, type) {
-  const container = document.getElementById('charSelector');
-  if (!container) return;
-
-  const effect = document.createElement('div');
-  effect.className = `hit-effect-char ${type}`;
-  effect.textContent = char;
-  
-  container.appendChild(effect);
-  // アニメーション終了後に要素を削除（800msの演出に余裕を持たせる）
-  setTimeout(() => effect.remove(), 1000);
+  return window.aiueoUi?.showHitEffect?.(char, type);
 }
 
-// 【文字ボタン状態制御】使用済み文字を非表示、自分の番でない時は操作不可
 function updateKanaButtons(usedChars = {}, isMyTurn = false, isMeDefeated = false) {
-  const buttons = kanaButtons.querySelectorAll('button');
-  buttons.forEach(btn => {
-    const char = btn.textContent;
-    if (char === '') return;
-    const isUsed = !!usedChars[char];
-    btn.classList.toggle('used', isUsed);
-    
-    // 使用済み、または自分の番でない、または脱落している場合はクリック不可
-    btn.disabled = isUsed || !isMyTurn || isMeDefeated;
-  });
+  return window.aiueoUi?.updateKanaButtons?.(usedChars, isMyTurn, isMeDefeated);
 }
 
 // ================== ゲームアクション ==================
@@ -710,6 +339,7 @@ startBtn.onclick = async () => {
         currentTurnPlayerId: firstPlayerId,
         attackCount: 0,
         turnStartedAt: Date.now(),
+        turnVersion: 0,
         winner: null,
         usedChars: {}
       });
@@ -759,100 +389,36 @@ resetGameBtn.onclick = async () => {
 };
 
 // ================== ゲームメカニクス ==================
-// 【かなボタン生成】五十音表（10×5）をボタンとして配置
 function generateKanaButtons() {
-  kanaButtons.innerHTML = '';
-  kanaTable.forEach(ch => {
-    const btn = document.createElement('button');
-    btn.textContent = ch;
-    if (ch === '') {
-      btn.style.visibility = 'hidden';
-    } else {
-      btn.onclick = () => attackWithChar(ch);
-    }
-    kanaButtons.appendChild(btn);
-  });
+  return window.aiueoUi?.generateKanaButtons?.();
 }
 
 // ================== タイマー制御 ==================
-// 【タイマー開始】Firebaseの開始時刻を基に残りの時間を表示・監視
-// タイムアウト時は自動的にターン交代を実行
 function startTurnTimer(startTime) {
-  clearInterval(timerInterval);
-  if (!startTime) return;
-
-  const updateTimer = () => {
-    const now = Date.now();
-    const elapsed = Math.floor((now - startTime) / 1000);
-    const remaining = Math.max(0, GAME_CONFIG.TURN_TIME_LIMIT - elapsed);
-
-    // タイマー表示を更新
-    timerDisplay.textContent = `残り時間: ${remaining}秒`;
-    
-    // 警告表示（残り5秒以下）
-    timerDisplay.classList.toggle(
-      'timer-warning', 
-      remaining <= GAME_CONFIG.TIMER_WARNING_THRESHOLD
-    );
-
-    // タイムアウト処理
-    if (remaining <= 0) {
-      clearInterval(timerInterval);
-      // 自分のターンの時のみ、タイムアウト処理を実行
-      // これにより、複数プレイヤーによる重複処理を防止
-      if (gameStatus.currentTurnPlayerId === me.uid) {
-        handleTimeout();
-      }
-    }
-  };
-  
-  updateTimer();
-  timerInterval = setInterval(updateTimer, 1000);
+  return window.aiueoUi?.startTurnTimer?.(startTime);
 }
 
-// 【タイマー停止】
 function stopTurnTimer() {
-  clearInterval(timerInterval);
-  timerDisplay.textContent = '';
-  timerDisplay.classList.remove('timer-warning');
+  return window.aiueoUi?.stopTurnTimer?.();
 }
 
 // 【タイムアウト処理】時間切れ時に強制的に次のプレイヤーへ交代
 // ゲーム状態を再確認し、安全にターン交代を実行
 async function handleTimeout() {
   try {
-    // 現在のゲーム状態を再確認
     if (gameStatus.state !== 'playing') {
       return;
     }
-    
-    log("時間切れ！次のプレイヤーに交代します");
-    
-    // 最新のプレイヤー情報を取得（脱落状態を確認）
-    const latestPlayersSnap = await roomRef.child('players').once('value');
-    const latestPlayers = latestPlayersSnap.val() || {};
-    
-    // 脱落していないプレイヤーをフィルタリング
-    const activePlayerIds = Object.keys(latestPlayers)
-      .filter(id => !latestPlayers[id].defeated);
-    
-    if (activePlayerIds.length === 0) {
-      console.warn('アクティブプレイヤーがいません');
+
+    const timeoutKey = `${gameStatus.currentTurnPlayerId || ''}:${gameStatus.turnStartedAt || 0}:${gameStatus.turnVersion || 0}`;
+    if (timeoutKey === lastTimeoutKey) {
       return;
     }
-    
-    // 次のプレイヤーを決定
-    const currentIdx = activePlayerIds.indexOf(gameStatus.currentTurnPlayerId);
-    const nextIdx = (currentIdx + 1) % activePlayerIds.length;
-    const nextId = activePlayerIds[nextIdx];
+    lastTimeoutKey = timeoutKey;
 
-    // ターン交代を実行
-    await roomRef.child('game').update({
-      state: 'playing',
-      currentTurnPlayerId: nextId,
-      attackCount: 0,
-      turnStartedAt: Date.now()
-    });
+    log("時間切れ！次のプレイヤーに交代します");
+
+    await advanceTurn();
   } catch (err) {
     console.error('タイムアウト処理エラー:', err);
   }
@@ -987,27 +553,7 @@ async function attackWithChar(char) {
     // 2) 既に2回攻撃済み
     // 3) 自分が脱落
     if (!otherHit || attackCount >= (GAME_CONFIG.MAX_ATTACKS_PER_TURN - 1) || myStatusSnap.val() === true) {
-      // ターン交代
-      const latestPlayersSnap = await roomRef.child('players').once('value');
-      const latestPlayers = latestPlayersSnap.val() || {};
-      const activePlayerIds = Object.keys(latestPlayers)
-        .filter(id => !latestPlayers[id].defeated);
-      
-      if (activePlayerIds.length === 0) {
-        console.warn('アクティブプレイヤーがいません');
-        return;
-      }
-      
-      const attackerIdxInActive = activePlayerIds.indexOf(me.uid);
-      const nextIdx = attackerIdxInActive === -1 ? 0 : (attackerIdxInActive + 1) % activePlayerIds.length;
-      const nextId = activePlayerIds[nextIdx];
-      
-      await roomRef.child('game').update({
-        state: 'playing',
-        currentTurnPlayerId: nextId,
-        attackCount: 0,
-        turnStartedAt: Date.now()
-      });
+      await advanceTurn();
     } else {
       // 連続攻撃
       await roomRef.child('game').update({ 
@@ -1066,10 +612,8 @@ async function checkGameEnd() {
 }
 
 // ================== ゲームログ ==================
-// 【ログ出力】タイムスタンプ付きのメッセージをログパネルに追加
-function log(msg){
-  const t = new Date().toLocaleTimeString();
-  logDiv.textContent = `[${t}] ${msg}\n` + logDiv.textContent;
+function log(msg) {
+  return window.aiueoUi?.log?.(msg);
 }
 
 // ================== 起動処理 ==================
